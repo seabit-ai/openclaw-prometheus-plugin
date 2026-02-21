@@ -123,7 +123,7 @@ function labels(obj) {
   return pairs ? `{${pairs}}` : '';
 }
 
-function generateMetrics() {
+function generateMetrics(debug = false) {
   const lines = [];
 
   // LLM in-flight gauge
@@ -171,9 +171,11 @@ function generateMetrics() {
   lines.push(`openclaw_agent_turns_total${labels({ status: 'all' })}   ${metrics.agentTurns.total}`);
   lines.push(`openclaw_agent_turns_total${labels({ status: 'error' })} ${metrics.agentTurns.errors}`);
 
-  // Debug event log
-  for (const e of metrics.events.slice(-10)) {
-    lines.push(`# ${e}`);
+  // Debug event log — only included when ?debug=1 is present in the request
+  if (debug) {
+    for (const e of metrics.events.slice(-10)) {
+      lines.push(`# ${e}`);
+    }
   }
 
   return lines.join('\n') + '\n';
@@ -188,8 +190,9 @@ export default function(api) {
   api.registerHttpRoute({
     path: '/metrics',
     handler: async (req, res) => {
+      const debug = new URL(req.url, 'http://localhost').searchParams.get('debug') === '1';
       res.setHeader('Content-Type', 'text/plain; version=0.0.4');
-      res.end(generateMetrics());
+      res.end(generateMetrics(debug));
     }
   });
 

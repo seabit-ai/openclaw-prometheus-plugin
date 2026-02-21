@@ -76,6 +76,18 @@ Notes:
 - `openclaw_agent_turn_duration_seconds` = full turn wall-time including all tool calls and LLM round-trips
 - Cost data is not available in the OpenClaw plugin event schema
 
+To include a rolling debug event log (last 10 events) in the scrape output, add `?debug=1`:
+
+```
+$ curl localhost:18789/metrics?debug=1
+...
+# 2026-02-21T19:01:47.008Z gateway_start - reset counters
+# 2026-02-21T19:02:41.439Z before_agent_start agentId=main sessionId=b2fd966f-...
+# 2026-02-21T19:02:41.488Z llm_input  runId=246871ef-... sessionId=b2fd966f-... anthropic/claude-sonnet-4-6
+# 2026-02-21T19:03:05.381Z agent_end  agentId=main sessionId=b2fd966f-... success 23892ms
+# 2026-02-21T19:03:05.390Z llm_output runId=246871ef-... sessionId=b2fd966f-... anthropic/claude-sonnet-4-6
+```
+
 ## Example PromQL Queries
 
 ```promql
