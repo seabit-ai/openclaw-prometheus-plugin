@@ -21,37 +21,22 @@
  *   fires; the in-flight gauge is decremented at agent_end (best-effort cleanup
  *   for the affected session).
  *
- * ─── Metrics produced ─────────────────────────────────────────────────────────
+ * ─── Example scrape output ────────────────────────────────────────────────────
  *
- *   openclaw_llm_in_flight{provider,model}
- *     Gauge. Currently in-flight LLM API calls.
- *     +1 at llm_input, -1 at llm_output.
- *     Stuck entries are cleared on agent_end (error path) and gateway_start.
- *
- *   openclaw_llm_requests_sent_total{provider,model}
- *     Counter. Cumulative LLM API calls sent (persists across restarts via token counters;
- *     in-flight and agent counters reset on gateway_start).
- *     +1 at llm_input.
- *
- *   openclaw_llm_duration_seconds_{sum,count}{provider,model,status}
- *     Histogram buckets (sum + count). Per-LLM-call latency from llm_input
- *     to llm_output.  status="success" only (error path has no llm_output).
- *
- *   openclaw_llm_tokens_total{provider,model,token_type}
- *     Counter. Token usage; token_type ∈ {input,output,cache_read,cache_write,total}.
- *     Recorded at llm_output.
- *
- *   openclaw_agent_turns_in_flight{agent_id}
- *     Gauge. Currently in-flight agent turns.
- *     +1 at before_agent_start, -1 at agent_end.
- *
- *   openclaw_agent_turn_duration_seconds_{sum,count}{agent_id,status}
- *     Histogram buckets. Per-turn wall-time from durationMs in agent_end.
- *     status ∈ {success, error}.
- *
- *   openclaw_agent_turns_total{status}
- *     Counter. Cumulative agent turns. status ∈ {all, error}.
- *     Reset to 0 on gateway_start (counts since last startup).
+ *   openclaw_llm_in_flight{provider="anthropic",model="claude-sonnet-4-6"} 1
+ *   openclaw_llm_requests_sent_total{provider="anthropic",model="claude-sonnet-4-6"} 4
+ *   openclaw_llm_duration_seconds_sum{provider="anthropic",model="claude-sonnet-4-6",status="success"} 143.489
+ *   openclaw_llm_duration_seconds_count{provider="anthropic",model="claude-sonnet-4-6",status="success"} 3
+ *   openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="input"} 118
+ *   openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="output"} 6497
+ *   openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="cache_read"} 1504043
+ *   openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="cache_write"} 383190
+ *   openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="total"} 1893848
+ *   openclaw_agent_turns_in_flight{agent_id="main"} 1
+ *   openclaw_agent_turn_duration_seconds_sum{agent_id="main",status="success"} 143.468
+ *   openclaw_agent_turn_duration_seconds_count{agent_id="main",status="success"} 3
+ *   openclaw_agent_turns_total{status="all"}   3
+ *   openclaw_agent_turns_total{status="error"} 0
  */
 
 // ─── Internal state ──────────────────────────────────────────────────────────
