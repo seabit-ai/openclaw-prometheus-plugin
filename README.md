@@ -52,30 +52,29 @@ scrape_configs:
 
 ## Metrics Reference
 
-### LLM Call Metrics
+```
+$ curl localhost:18789/metrics
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `openclaw_llm_in_flight` | Gauge | `provider`, `model` | LLM API calls currently in-flight. +1 at `llm_input`, -1 at `llm_output`. Cleared on gateway restart. |
-| `openclaw_llm_requests_sent_total` | Counter | `provider`, `model` | Cumulative LLM API calls sent. |
-| `openclaw_llm_duration_seconds_sum` | Histogram | `provider`, `model`, `status` | Sum of per-call LLM latency (wall-time from request send to first response). `status="success"` only — failed calls have no `llm_output` event. |
-| `openclaw_llm_duration_seconds_count` | Histogram | `provider`, `model`, `status` | Number of LLM call latency observations. |
-| `openclaw_llm_tokens_total` | Counter | `provider`, `model`, `token_type` | Cumulative token usage. `token_type` ∈ `{input, output, cache_read, cache_write, total}`. |
+openclaw_llm_in_flight{provider="anthropic",model="claude-sonnet-4-6"} 1
+openclaw_llm_requests_sent_total{provider="anthropic",model="claude-sonnet-4-6"} 4
+openclaw_llm_duration_seconds_sum{provider="anthropic",model="claude-sonnet-4-6",status="success"} 143.489
+openclaw_llm_duration_seconds_count{provider="anthropic",model="claude-sonnet-4-6",status="success"} 3
+openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="input"} 118
+openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="output"} 6497
+openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="cache_read"} 1504043
+openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="cache_write"} 383190
+openclaw_llm_tokens_total{provider="anthropic",model="claude-sonnet-4-6",token_type="total"} 1893848
+openclaw_agent_turns_in_flight{agent_id="main"} 1
+openclaw_agent_turn_duration_seconds_sum{agent_id="main",status="success"} 143.468
+openclaw_agent_turn_duration_seconds_count{agent_id="main",status="success"} 3
+openclaw_agent_turns_total{status="all"}   3
+openclaw_agent_turns_total{status="error"} 0
+```
 
-### Agent Turn Metrics
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `openclaw_agent_turns_in_flight` | Gauge | `agent_id` | Agent turns currently in progress. Deduplicated by `sessionId` (OpenClaw fires `before_agent_start` twice per turn). |
-| `openclaw_agent_turn_duration_seconds_sum` | Histogram | `agent_id`, `status` | Sum of agent turn wall-time (`durationMs` from `agent_end`). Includes all LLM round-trips and tool calls. `status` ∈ `{success, error}`. |
-| `openclaw_agent_turn_duration_seconds_count` | Histogram | `agent_id`, `status` | Number of agent turn observations. |
-| `openclaw_agent_turns_total` | Counter | `status` | Agent turns completed since last gateway start. `status` ∈ `{all, error}`. Reset on restart. |
-
-### Notes
-
-- **LLM latency vs agent turn duration**: `openclaw_llm_duration_seconds` measures the time from sending the LLM request to receiving the response (pure API latency). `openclaw_agent_turn_duration_seconds` measures the full turn wall-time including all tool calls and multiple LLM round-trips.
-- **Error path**: If a LLM call fails (network error, timeout), `llm_output` never fires. The in-flight gauge is cleaned up best-effort at `agent_end` for the affected session.
-- **No cost tracking**: Cost data is not available in the current OpenClaw plugin event schema.
+Notes:
+- `openclaw_llm_duration_seconds` = pure LLM API latency (llm_input → llm_output)
+- `openclaw_agent_turn_duration_seconds` = full turn wall-time including all tool calls and LLM round-trips
+- Cost data is not available in the OpenClaw plugin event schema
 
 ## Example PromQL Queries
 
