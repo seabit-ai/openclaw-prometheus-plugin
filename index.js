@@ -21,6 +21,14 @@
  *   fires; the in-flight gauge is decremented at agent_end (best-effort cleanup
  *   for the affected session).
  *
+ * ─── Persistence across restarts ──────────────────────────────────────────────
+ *
+ *   Cumulative counters are persisted to ~/.openclaw/prometheus-snapshot.json
+ *   (or $OPENCLAW_STATE_DIR/prometheus-snapshot.json) on shutdown and restored
+ *   on startup. This prevents counter resets on gateway restarts.
+ *
+ *   Transient gauges (in-flight) are NOT persisted and reset to 0 on startup.
+ *
  * ─── Example scrape output ────────────────────────────────────────────────────
  *
  *   openclaw_llm_in_flight{provider="anthropic",model="claude-sonnet-4-6"} 1
@@ -38,6 +46,15 @@
  *   openclaw_agent_turns_total{status="all"}   3
  *   openclaw_agent_turns_total{status="error"} 0
  */
+
+import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import path from 'node:path';
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+
+const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, '.openclaw');
+const SNAPSHOT_PATH = path.join(stateDir, 'prometheus-snapshot.json');
 
 // ─── Internal state ──────────────────────────────────────────────────────────
 
@@ -96,7 +113,7 @@ const metrics = {
   // Purpose: lets agent_end(error) find which provider:model to clear from llmInFlight
   sessionLastModel: new Map(),
 
-  // Rolling debug event log; last 20 entries; surfaced as # comments in /metrics output
+  // Rolling debug event log; last 1000 entries; surfaced as # comments in /metrics output
   // Each entry: string  e.g. "2026-02-21T18:38:07.010Z llm_input runId=36ed... anthropic/claude-sonnet-4-6"
   events: [],
 };
@@ -113,7 +130,7 @@ function gaugeDelta(map, k, delta, min = 0) {
 
 function logEvent(msg) {
   metrics.events.push(`${new Date().toISOString()} ${msg}`);
-  if (metrics.events.length > 20) metrics.events.shift();
+  if (metrics.events.length > 1000) metrics.events.shift();
 }
 
 // ─── Prometheus text output ──────────────────────────────────────────────────
@@ -123,7 +140,7 @@ function labels(obj) {
   return pairs ? `{${pairs}}` : '';
 }
 
-function generateMetrics(debug = false) {
+function generateMetrics(maxEventLines = 0) {
   const lines = [];
 
   // LLM in-flight gauge
@@ -171,9 +188,11 @@ function generateMetrics(debug = false) {
   lines.push(`openclaw_agent_turns_total${labels({ status: 'all' })}   ${metrics.agentTurns.total}`);
   lines.push(`openclaw_agent_turns_total${labels({ status: 'error' })} ${metrics.agentTurns.errors}`);
 
-  // Debug event log — only included when ?debug=1 is present in the request
-  if (debug) {
-    for (const e of metrics.events.slice(-10)) {
+  // Event log — included when ?lines=N is present (N: 1-1000)
+  if (maxEventLines > 0) {
+    const numLines = Math.min(maxEventLines, 1000);
+    const eventsToShow = metrics.events.slice(-numLines);
+    for (const e of eventsToShow) {
       lines.push(`# ${e}`);
     }
   }
@@ -181,7 +200,59 @@ function generateMetrics(debug = false) {
   return lines.join('\n') + '\n';
 }
 
+// ─── Snapshot persistence ────────────────────────────────────────────────────
+
+// Synchronous version for gateway_stop (fire-and-forget hook, must be sync)
+function saveSnapshotSync() {
+  try {
+    const snapshot = {
+      timestamp: Date.now(),
+      version: 1,
+      // Cumulative counters (persist these)
+      llmSent: Object.fromEntries(metrics.llmSent),
+      llmDurationSum: Object.fromEntries(metrics.llmDurationSum),
+      llmDurationCount: Object.fromEntries(metrics.llmDurationCount),
+      tokens: Object.fromEntries(metrics.tokens),
+      agentDurationSum: Object.fromEntries(metrics.agentDurationSum),
+      agentDurationCount: Object.fromEntries(metrics.agentDurationCount),
+      agentTurns: { ...metrics.agentTurns },
+      // Transient gauges NOT saved (llmInFlight, agentInFlight, etc.)
+    };
+    fsSync.writeFileSync(SNAPSHOT_PATH, JSON.stringify(snapshot, null, 2));
+    return snapshot;
+  } catch (err) {
+    throw new Error(`Failed to save snapshot: ${err.message}`);
+  }
+}
+
+async function loadSnapshot() {
+  try {
+    const raw = await fs.readFile(SNAPSHOT_PATH, 'utf8');
+    const data = JSON.parse(raw);
+    
+    // Restore cumulative counters from snapshot
+    for (const [k, v] of Object.entries(data.llmSent || {}))          metrics.llmSent.set(k, v);
+    for (const [k, v] of Object.entries(data.llmDurationSum || {}))   metrics.llmDurationSum.set(k, v);
+    for (const [k, v] of Object.entries(data.llmDurationCount || {})) metrics.llmDurationCount.set(k, v);
+    for (const [k, v] of Object.entries(data.tokens || {}))           metrics.tokens.set(k, v);
+    for (const [k, v] of Object.entries(data.agentDurationSum || {})) metrics.agentDurationSum.set(k, v);
+    for (const [k, v] of Object.entries(data.agentDurationCount || {})) metrics.agentDurationCount.set(k, v);
+    
+    metrics.agentTurns.total  = data.agentTurns?.total  || 0;
+    metrics.agentTurns.errors = data.agentTurns?.errors || 0;
+    
+    return data;
+  } catch (err) {
+    if (err.code === 'ENOENT') return null; // File doesn't exist (first run)
+    throw new Error(`Failed to load snapshot: ${err.message}`);
+  }
+}
+
 // ─── Plugin entry point ──────────────────────────────────────────────────────
+
+// Auto-save interval (milliseconds)
+const AUTO_SAVE_INTERVAL_MS = 30000; // 30 seconds
+let autoSaveTimer = null;
 
 export default function(api) {
   api.logger.info('Prometheus exporter loaded');
@@ -190,22 +261,52 @@ export default function(api) {
   api.registerHttpRoute({
     path: '/metrics',
     handler: async (req, res) => {
-      const debug = new URL(req.url, 'http://localhost').searchParams.get('debug') === '1';
+      const url = new URL(req.url, 'http://localhost');
+      const linesParam = url.searchParams.get('lines');
+      const maxEventLines = linesParam ? Math.max(1, Math.min(parseInt(linesParam, 10), 1000)) : 0;
       res.setHeader('Content-Type', 'text/plain; version=0.0.4');
-      res.end(generateMetrics(debug));
+      res.end(generateMetrics(maxEventLines));
     }
   });
 
-  // ── gateway_start: reset per-startup counters + stuck gauges ──────────────
+  // ── gateway_start: restore counters from snapshot + clear transient gauges ───
   // Called once on every gateway process start.
-  api.on('gateway_start', () => {
-    metrics.llmInFlight.clear();       // clear any stuck in-flight from previous run
+  api.on('gateway_start', async () => {
+    // Load persisted cumulative counters (if snapshot exists)
+    const snapshot = await loadSnapshot();
+    if (snapshot) {
+      const ageMs = Date.now() - snapshot.timestamp;
+      const ageSec = (ageMs / 1000).toFixed(1);
+      api.logger.info(`Restored metrics snapshot (age: ${ageSec}s, path: ${SNAPSHOT_PATH})`);
+      logEvent(`gateway_start - restored snapshot (age ${ageSec}s)`);
+    } else {
+      api.logger.info('No metrics snapshot found, starting fresh');
+      logEvent('gateway_start - no snapshot (fresh start)');
+    }
+    
+    // Clear transient gauges and initialize to 0 for all known provider:model combinations
+    // This ensures we always output gauge values (including 0) after restart
+    metrics.llmInFlight.clear();
     metrics.agentInFlight.clear();
     metrics.llmStartTimes.clear();
     metrics.sessionLastModel.clear();
-    metrics.agentTurns.total  = 0;
-    metrics.agentTurns.errors = 0;
-    logEvent('gateway_start - reset counters');
+    
+    // Initialize in-flight gauges to 0 for all known provider:model from snapshot
+    // This is critical: gauge values of 0 are important data points and must always be present
+    for (const k of metrics.llmSent.keys()) {
+      metrics.llmInFlight.set(k, 0);
+    }
+    
+    // Initialize agent in-flight gauges (empty Set for all known agentIds)
+    const knownAgentIds = new Set();
+    for (const k of metrics.agentDurationSum.keys()) {
+      const lastColon = k.lastIndexOf(':');
+      const agentId = k.slice(0, lastColon);
+      knownAgentIds.add(agentId);
+    }
+    for (const agentId of knownAgentIds) {
+      metrics.agentInFlight.set(agentId, new Set());
+    }
   });
 
   // ── before_agent_start: agent turn begins ─────────────────────────────────
@@ -314,13 +415,48 @@ export default function(api) {
     logEvent(`agent_end  agentId=${agentId} sessionId=${sessionId} ${status} ${durationMs}ms`);
   });
 
-  // Reset state on startup (also handled above in gateway_start event, but
-  // this runs synchronously before any requests arrive)
-  metrics.llmInFlight.clear();
-  metrics.agentInFlight.clear();
-  metrics.agentTurns.total  = 0;
-  metrics.agentTurns.errors = 0;
-  logEvent('gateway_start - reset counters');
+  // ── gateway_stop: save metrics snapshot before shutdown ──────────────────
+  // NOTE: gateway_stop is fire-and-forget, so we use synchronous file write
+  api.on('gateway_stop', (evt, ctx) => {
+    const reason = evt?.reason || 'unknown';
+    
+    // Stop auto-save timer
+    if (autoSaveTimer) {
+      clearInterval(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    
+    try {
+      const snapshot = saveSnapshotSync();
+      const counters = {
+        llmSent: metrics.llmSent.size,
+        tokens: metrics.tokens.size,
+        agentTurns: metrics.agentTurns.total,
+      };
+      api.logger.info(`Saved metrics snapshot: ${JSON.stringify(counters)} (reason: ${reason}, path: ${SNAPSHOT_PATH})`);
+      logEvent(`gateway_stop - saved snapshot (${counters.llmSent} models, ${counters.agentTurns} turns)`);
+    } catch (err) {
+      api.logger.error(`Failed to save metrics snapshot: ${err.message}`);
+      logEvent(`gateway_stop - ERROR: ${err.message}`);
+    }
+  });
 
-  api.logger.info('Prometheus ready at /metrics');
+  // ── Auto-save timer: periodic snapshot saves (crash safety) ──────────────
+  // Saves snapshot every 5 minutes in case gateway crashes without shutdown event
+  autoSaveTimer = setInterval(() => {
+    try {
+      saveSnapshotSync();
+      const counters = {
+        llmSent: metrics.llmSent.size,
+        tokens: metrics.tokens.size,
+        agentTurns: metrics.agentTurns.total,
+      };
+      logEvent(`auto-save - saved snapshot (${counters.llmSent} models, ${counters.agentTurns} turns)`);
+    } catch (err) {
+      api.logger.warn(`Auto-save failed: ${err.message}`);
+      logEvent(`auto-save - ERROR: ${err.message}`);
+    }
+  }, AUTO_SAVE_INTERVAL_MS);
+
+  api.logger.info(`Prometheus plugin loaded, /metrics endpoint ready (auto-save every ${AUTO_SAVE_INTERVAL_MS / 1000}s)`);
 }
