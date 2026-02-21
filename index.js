@@ -442,7 +442,7 @@ export default function(api) {
   });
 
   // ── Auto-save timer: periodic snapshot saves (crash safety) ──────────────
-  // Saves snapshot every 5 minutes in case gateway crashes without shutdown event
+  // Saves snapshot every 30 seconds in case gateway crashes without shutdown event
   autoSaveTimer = setInterval(() => {
     try {
       saveSnapshotSync();

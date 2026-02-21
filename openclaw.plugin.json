@@ -2,7 +2,7 @@
   "id": "openclaw-prometheus-plugin",
   "name": "Prometheus Metrics Exporter",
   "description": "Exposes OpenClaw LLM metrics in Prometheus text format at /metrics endpoint",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

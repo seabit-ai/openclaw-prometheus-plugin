@@ -1,6 +1,6 @@
 {
   "name": "openclaw-prometheus-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Prometheus metrics exporter for OpenClaw - exposes LLM usage, cost, and duration via /metrics endpoint",
   "main": "index.js",
   "type": "module",
