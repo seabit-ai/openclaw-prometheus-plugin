@@ -21,7 +21,7 @@
     "openclaw": ">=0.14.0"
   },
   "openclaw": {
-    "id": "prometheus-exporter",
+    "id": "openclaw-prometheus-plugin",
     "name": "Prometheus Metrics Exporter",
     "description": "Exposes OpenClaw LLM metrics in Prometheus format at /metrics",
     "extensions": [

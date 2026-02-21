@@ -1,5 +1,5 @@
 {
-  "id": "prometheus-exporter",
+  "id": "openclaw-prometheus-plugin",
   "name": "Prometheus Metrics Exporter",
   "description": "Exposes OpenClaw LLM metrics in Prometheus text format at /metrics endpoint",
   "version": "0.1.0",
