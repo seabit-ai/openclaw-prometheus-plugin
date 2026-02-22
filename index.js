@@ -253,6 +253,7 @@ async function loadSnapshot() {
 // Auto-save interval (milliseconds)
 const AUTO_SAVE_INTERVAL_MS = 30000; // 30 seconds
 let autoSaveTimer = null;
+let isDirty = false;  // true when persisted metrics have changed since last save
 
 export default function(api) {
   api.logger.info('Prometheus exporter loaded');
@@ -340,6 +341,7 @@ export default function(api) {
     // Record latest model for this session (used for stuck-gauge cleanup at agent_end)
     if (sessionId) metrics.sessionLastModel.set(sessionId, { provider, model });
 
+    isDirty = true;
     logEvent(`llm_input  runId=${runId} sessionId=${sessionId} ${provider}/${model}`);
   });
 
@@ -371,6 +373,7 @@ export default function(api) {
       if (usage.total)      inc(metrics.tokens, key(provider, model, 'total'),       usage.total);
     }
 
+    isDirty = true;
     logEvent(`llm_output runId=${runId} sessionId=${sessionId} ${provider}/${model}`);
   });
 
@@ -412,6 +415,7 @@ export default function(api) {
       metrics.sessionLastModel.delete(sessionId);
     }
 
+    isDirty = true;
     logEvent(`agent_end  agentId=${agentId} sessionId=${sessionId} ${status} ${durationMs}ms`);
   });
 
@@ -444,8 +448,10 @@ export default function(api) {
   // ── Auto-save timer: periodic snapshot saves (crash safety) ──────────────
   // Saves snapshot every 30 seconds in case gateway crashes without shutdown event
   autoSaveTimer = setInterval(() => {
+    if (!isDirty) return;  // nothing changed since last save, skip
     try {
       saveSnapshotSync();
+      isDirty = false;
       const counters = {
         llmSent: metrics.llmSent.size,
         tokens: metrics.tokens.size,
