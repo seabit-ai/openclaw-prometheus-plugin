@@ -91,10 +91,14 @@ function getPricing(provider, model) {
   if (pricingOverrides[pluginKey]) return pricingOverrides[pluginKey];
 
   // Layer 2: OpenRouter cache
-  // For openrouter provider, model is already OR format (e.g. "anthropic/claude-sonnet-4-6")
-  // For other providers, try constructing OR id as "provider/model"
-  const orKey = provider === 'openrouter' ? model : `${provider}/${model}`;
-  if (orPricing[orKey]) return orPricing[orKey];
+  // OpenRouter uses dots in version numbers (e.g. claude-sonnet-4.6) while OpenClaw
+  // normalizes to hyphens (claude-sonnet-4-6). Try both forms.
+  const orBase = provider === 'openrouter' ? model : `${provider}/${model}`;
+  // Try exact match first, then hyphen→dot normalization on the last segment
+  const orKeyDot = orBase.replace(/-(\d+)$/, '.$1');
+  for (const orKey of [orBase, orKeyDot]) {
+    if (orPricing[orKey]) return orPricing[orKey];
+  }
 
   return null; // unknown → cost = 0
 }
