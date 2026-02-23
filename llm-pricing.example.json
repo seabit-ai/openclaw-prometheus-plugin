@@ -1,0 +1,41 @@
+{
+  "_comment": "Copy this file to ~/.openclaw/llm-pricing.json and fill in the models you use.",
+  "_format": "Keys are 'provider:model' (matching OpenClaw's provider/model identifiers). Values are prices in USD per 1M tokens (MTok).",
+  "_priority": "Entries here take priority over OpenRouter API pricing. Use this to override incorrect prices or add models not on OpenRouter.",
+  "_hot_reload": "Changes to this file are picked up automatically — no gateway restart needed.",
+
+  "anthropic:claude-sonnet-4-6": {
+    "input":       3.00,
+    "output":      15.00,
+    "cache_write":  3.75,
+    "cache_read":   0.30
+  },
+  "anthropic:claude-opus-4-6": {
+    "input":       15.00,
+    "output":      75.00,
+    "cache_write": 18.75,
+    "cache_read":   1.50
+  },
+  "anthropic:claude-haiku-3-5": {
+    "input":       0.80,
+    "output":      4.00,
+    "cache_write":  1.00,
+    "cache_read":   0.08
+  },
+  "openai:gpt-4o": {
+    "input":   2.50,
+    "output": 10.00
+  },
+  "openai:o3": {
+    "input":  10.00,
+    "output": 40.00
+  },
+  "google:gemini-2.5-flash": {
+    "input":  0.15,
+    "output": 0.60
+  },
+  "minimax-portal:MiniMax-M2.5": {
+    "input":  0.40,
+    "output": 1.60
+  }
+}
