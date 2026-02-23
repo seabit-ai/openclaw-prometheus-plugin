@@ -358,7 +358,7 @@ export default function(api) {
 
   // ── llm_output ────────────────────────────────────────────────────────────
   api.on('llm_output', (evt) => {
-    const { runId, sessionId, provider, model, usage } = evt;
+    const { runId, sessionId, provider, model, usage, assistantTexts } = evt;
     const modelKey = key(provider, model);
 
     gaugeDelta(metrics.llmInFlight, modelKey, -1);
@@ -394,7 +394,9 @@ export default function(api) {
     }
 
     isDirty = true;
-    logEvent(`llm_output runId=${runId} sessionId=${sessionId} ${provider}/${model}`);
+    const usageStr = usage ? `usage=${JSON.stringify(usage)}` : 'usage=none';
+    const textLen = Array.isArray(assistantTexts) ? assistantTexts.reduce((s, t) => s + t.length, 0) : 0;
+    logEvent(`llm_output runId=${runId} sessionId=${sessionId} ${provider}/${model} ${usageStr} textLen=${textLen}`);
   });
 
   // ── agent_end ─────────────────────────────────────────────────────────────
@@ -428,7 +430,8 @@ export default function(api) {
     }
 
     isDirty = true;
-    logEvent(`agent_end  agentId=${agentId} sessionId=${sessionId} ${status} ${durationMs}ms`);
+    const errorStr = error ? ` error=${JSON.stringify(error)}` : '';
+    logEvent(`agent_end  agentId=${agentId} sessionId=${sessionId} ${status} ${durationMs}ms${errorStr}`);
   });
 
   // ── gateway_stop ──────────────────────────────────────────────────────────
