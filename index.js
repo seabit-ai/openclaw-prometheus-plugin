@@ -28,6 +28,28 @@
  *
  *   Cumulative counters (tokens + cost) persisted to prometheus-snapshot.json.
  *
+ * ─── Input token normalization ────────────────────────────────────────────────
+ *
+ *   Providers differ in how `usage.input` is reported when prompt caching is active:
+ *
+ *   GROSS reporters — `input` = full prompt size (cached tokens included):
+ *     - google/*          (Gemini family, verified 2026-02-24)
+ *     - minimax-portal/*  (MiniMax M2.x, verified 2026-02-24)
+ *
+ *   NET reporters — `input` = new (uncached) tokens only:
+ *     - anthropic/*       (Claude family)
+ *     - openrouter/*      (inherits the upstream provider's style, but OpenRouter
+ *                          normalizes to net before returning — treat as net)
+ *     - openai/*          (GPT family, no prompt caching as of 2026-02)
+ *     - xai/*             (Grok family, no prompt caching as of 2026-02)
+ *
+ *   The function resolveNetInput() encodes this knowledge explicitly.
+ *   `input_net` metric always represents "new tokens actually processed" regardless
+ *   of provider, and is used for cost estimation to avoid over-counting.
+ *
+ *   MAINTENANCE NOTE: if a provider changes their reporting style, update
+ *   GROSS_INPUT_PROVIDERS below and add a comment with the date + evidence.
+ *
  */
 
 import fs from 'node:fs/promises';
@@ -39,6 +61,49 @@ import path from 'node:path';
 const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, '.openclaw');
 const SNAPSHOT_PATH = path.join(stateDir, 'prometheus-snapshot.json');
 const PRICING_PATH  = path.join(stateDir, 'llm-pricing.json');
+
+// ─── Input token normalization ────────────────────────────────────────────────
+
+/**
+ * Providers that report `usage.input` as GROSS (full prompt, cached tokens included).
+ * All others are assumed to report NET (new tokens only).
+ *
+ * Key format: "provider" (matches the OpenClaw provider field, e.g. "google").
+ * To add a new gross reporter, append to this Set and note the date + source.
+ */
+const GROSS_INPUT_PROVIDERS = new Set([
+  'google',         // Gemini family — promptTokenCount includes cachedContentTokenCount
+                    // Verified 2026-02-24 via observed usage data
+  'minimax-portal', // MiniMax M2.x — input field includes cache_read tokens
+                    // Verified 2026-02-24 via observed usage data
+]);
+
+/**
+ * Resolves the "net input" token count — i.e. newly processed (non-cached) tokens.
+ *
+ * For GROSS reporters: net = max(0, input - cacheRead)
+ * For NET reporters:   net = input  (already correct)
+ *
+ * @param {string} provider  - OpenClaw provider id (e.g. "google", "anthropic")
+ * @param {object} usage     - Raw usage object from llm_output event
+ * @returns {{ netInput: number, inputStyle: 'gross'|'net' }}
+ */
+function resolveNetInput(provider, usage) {
+  const rawInput  = usage.input     || 0;
+  const cacheRead = usage.cacheRead || 0;
+
+  if (GROSS_INPUT_PROVIDERS.has(provider)) {
+    return {
+      netInput:   Math.max(0, rawInput - cacheRead),
+      inputStyle: 'gross',
+    };
+  }
+
+  return {
+    netInput:   rawInput,
+    inputStyle: 'net',
+  };
+}
 
 // ─── Pricing ──────────────────────────────────────────────────────────────────
 // All prices in $ per 1M tokens (MTok).
@@ -277,12 +342,15 @@ export default function(api) {
   // ── /metrics HTTP endpoint ─────────────────────────────────────────────────
   api.registerHttpRoute({
     path: '/metrics',
+    auth: 'plugin', // No gateway auth required for Prometheus scraping
+    match: 'exact',
     handler: async (req, res) => {
       const url = new URL(req.url, 'http://localhost');
       const linesParam = url.searchParams.get('lines');
       const maxEventLines = linesParam ? Math.max(1, Math.min(parseInt(linesParam, 10), 1000)) : 0;
       res.setHeader('Content-Type', 'text/plain; version=0.0.4');
       res.end(generateMetrics(maxEventLines));
+      return true; // Indicate route handled the request
     }
   });
 
@@ -373,24 +441,37 @@ export default function(api) {
     }
 
     if (usage) {
-      if (usage.input)      inc(metrics.tokens, key(provider, model, 'input'),       usage.input);
-      if (usage.output)     inc(metrics.tokens, key(provider, model, 'output'),      usage.output);
-      if (usage.cacheRead)  inc(metrics.tokens, key(provider, model, 'cache_read'),  usage.cacheRead);
-      if (usage.cacheWrite) inc(metrics.tokens, key(provider, model, 'cache_write'), usage.cacheWrite);
-      if (usage.total)      inc(metrics.tokens, key(provider, model, 'total'),       usage.total);
+      const rawInput  = usage.input      || 0;
+      const rawOutput = usage.output     || 0;
+      const rawCache  = usage.cacheRead  || 0;
+      const rawWrite  = usage.cacheWrite || 0;
+      const rawTotal  = usage.total      || 0;
 
-      // ── Cost estimation ──────────────────────────────────────────────────
+      // Resolve net input — see resolveNetInput() and GROSS_INPUT_PROVIDERS for details
+      const { netInput, inputStyle } = resolveNetInput(provider, usage);
+
+      if (rawInput)  inc(metrics.tokens, key(provider, model, 'input'),       rawInput);
+      if (rawOutput) inc(metrics.tokens, key(provider, model, 'output'),      rawOutput);
+      if (rawCache)  inc(metrics.tokens, key(provider, model, 'cache_read'),  rawCache);
+      if (rawWrite)  inc(metrics.tokens, key(provider, model, 'cache_write'), rawWrite);
+      if (rawTotal)  inc(metrics.tokens, key(provider, model, 'total'),       rawTotal);
+      // input_net = new tokens actually processed (normalized across all providers)
+      inc(metrics.tokens, key(provider, model, 'input_net'), netInput);
+
+      // ── Cost estimation — always use input_net, never raw input ─────────
       const price = getPricing(provider, model);
       if (price) {
-        let total = 0;
-        total += incCost(provider, model, 'input',       usage.input,      price.input);
-        total += incCost(provider, model, 'output',      usage.output,     price.output);
-        total += incCost(provider, model, 'cache_write', usage.cacheWrite, price.cache_write);
-        total += incCost(provider, model, 'cache_read',  usage.cacheRead,  price.cache_read);
-        if (total > 0) inc(metrics.cost, key(provider, model, 'total'), total);
+        let totalCost = 0;
+        totalCost += incCost(provider, model, 'input',       netInput,  price.input);
+        totalCost += incCost(provider, model, 'output',      rawOutput, price.output);
+        totalCost += incCost(provider, model, 'cache_write', rawWrite,  price.cache_write);
+        totalCost += incCost(provider, model, 'cache_read',  rawCache,  price.cache_read);
+        if (totalCost > 0) inc(metrics.cost, key(provider, model, 'total'), totalCost);
       } else {
         logEvent(`pricing - no price for ${provider}/${model}, cost not tracked`);
       }
+
+      logEvent(`llm_output ${provider}/${model} style=${inputStyle} input=${rawInput} net=${netInput} cache=${rawCache} output=${rawOutput}`);
     }
 
     isDirty = true;

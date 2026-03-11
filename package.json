@@ -1,7 +1,7 @@
 {
-  "name": "openclaw-prometheus-plugin",
-  "version": "0.2.0",
-  "description": "Prometheus metrics exporter for OpenClaw - exposes LLM usage, cost, and duration via /metrics endpoint",
+  "name": "@seabit-ai/openclaw-prometheus-plugin",
+  "version": "0.4.0",
+  "description": "Prometheus metrics exporter for OpenClaw — LLM usage, cost estimation, latency, and agent turn metrics via /metrics",
   "main": "index.js",
   "type": "module",
   "keywords": [
@@ -13,7 +13,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/seabit-ai/openclaw-prometheus-plugin"
+    "url": "git+https://github.com/seabit-ai/openclaw-prometheus-plugin.git"
   },
   "author": "Seabit AI",
   "license": "MIT",

@@ -38,11 +38,10 @@ Then restart the gateway:
 openclaw gateway restart
 ```
 
-### Install from npm (future)
+### Install from npm
 
 ```bash
-npm install -g openclaw-prometheus-plugin
-openclaw plugins install openclaw-prometheus-plugin
+openclaw plugins install @seabit-ai/openclaw-prometheus-plugin
 openclaw gateway restart
 ```
 
